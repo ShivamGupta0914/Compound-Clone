@@ -2,15 +2,14 @@
 pragma solidity 0.8.19;
 
 import "./InterestRateInterface.sol";
-contract InterestRateModel is InterestRateModelInterface {
 
+contract InterestRateModel is InterestRateModelInterface {
     event InterestRateUpdated(
         uint baseRatePerBlock,
         uint multiplierPerBlock,
         uint jumpMultiplierPerBlock,
         uint kink
     );
-    
 
     uint256 private constant BASE = 1e18;
 
