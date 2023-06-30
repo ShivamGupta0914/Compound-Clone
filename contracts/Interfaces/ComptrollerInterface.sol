@@ -1,20 +1,26 @@
 //SPDX-License-Identifier: MIT
 pragma solidity 0.8.19;
-import "./CToken.sol";
+import "../CToken.sol";
 
 interface ComptrollerInterface {
+
+    event MarketListed(address market, uint256 collateralFactor);
+    event CollateralFactorUpdated(address market, uint256 oldCollateralFactor, uint256 newCollateralFactor);
+    event  MarketExited(address cToken, address account);
+
     struct Market {
         bool isListed;
-        uint256 collateralFactorMantissa;
+        uint256 collateralFactor;
         mapping(address => bool) accountMembership;
     }
 
     struct AccountLiquidityLocalVars {
-        uint sumCollateral;
-        uint totalBorrows;
-        uint cTokenBalance;
-        uint borrowBalance;
-        uint exchangeRateMantissa;
+        uint256 sumCollateral;
+        uint256 totalBorrows;
+        uint256 cTokenBalance;
+        uint256 borrowBalance;
+        uint256 exchangeRate;
+        uint256 collateralFactor;
     }
 
     function mintAllowed(address cToken) external returns (bool);

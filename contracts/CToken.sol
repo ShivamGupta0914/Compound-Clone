@@ -1,28 +1,44 @@
 //SPDX-License-Identifier: MIT
 pragma solidity 0.8.19;
 import "./ERC20.sol";
-import "./CTokenInterface.sol";
-import "./ComptrollerInterface.sol";
-import "./InterestRateInterface.sol";
+import "./Interfaces/CTokenInterface.sol";
+import "./Interfaces/ComptrollerInterface.sol";
+import "./Interfaces/InterestRateModelInterface.sol";
 
 abstract contract CToken is ERC20, CTokenInterface {
-    struct BorrowSnapshot {
-        uint principal;
-        uint interestIndex;
-    }
 
+    uint8 constant public DECIMALS = 8;
+
+    // Maximum Borrow Rate per block.
+    uint256 constant BORROW_RATE_MAX = 0.0005e16;
+    
+    // Initial exchange rate when market is initialized.
+    uint256 public initialExchangeRate;
+
+    // Last updated block number.
+    uint256 public lastBlockNumber;
+
+    // Total number of underlying asset borrowed.
+    uint256 public totalBorrows;
+
+    // Current Market Borrow Index.
+    uint256 public borrowIndex;
+
+    // how much will be taken for protocol.
+    uint256 public reserveFactor;
+
+    // Total reserves of underlying asset for protol.
+    uint256 public totalReserves;
+
+    // Admin of CToken.
+    address private admin;
+
+    // Underlying Asset address
+    address public underlying;
+
+    bool public isCtoken = true;
     // Mapping of account addresses to outstanding borrow balances
     mapping(address => BorrowSnapshot) internal accountBorrows;
-    // uint256 supplyIndex;
-    uint256 initialExchangeRate;
-    uint256 lastBlockNumber;
-    uint256 totalBorrows;
-    uint256 borrowIndex;
-    uint256 reserveFactor;
-    uint256 totalReserves;
-    address underlying;
-    address admin;
-    uint256 constant borrowRateMax = 0.0005e16;
 
     IERC20 token;
     ComptrollerInterface comptroller;
@@ -31,11 +47,11 @@ abstract contract CToken is ERC20, CTokenInterface {
     function initialize(
         string calldata _name,
         string calldata _symbol,
+        uint256 _reserveFactor,
         address _underlying,
         ComptrollerInterface _comptroller,
         IERC20 _token,
-        InterestRateModelInterface _interestRateModel,
-        uint256 _reserveFactor
+        InterestRateModelInterface _interestRateModel
     ) public {
         tokenName = _name;
         tokenSymbol = _symbol;
@@ -79,7 +95,8 @@ abstract contract CToken is ERC20, CTokenInterface {
         totalSupply -= redeemTokens;
         tokenBalance[msg.sender] -= redeemTokens;
 
-        uint256 redeemAmount = redeemTokens * getExchangeRateInternal();
+        uint256 redeemAmount = (redeemTokens * getExchangeRateInternal()) /
+            1e18;
 
         doTransferOut(redeemAmount);
         emit Redeem(msg.sender, redeemTokens);
@@ -145,10 +162,6 @@ abstract contract CToken is ERC20, CTokenInterface {
         uint currentBlockNumber = block.number;
         uint blockNumberPrev = lastBlockNumber;
 
-        if (blockNumberPrev == currentBlockNumber) {
-            return;
-        }
-
         uint256 cashPrev = getCashPrior();
         uint256 borrowsPrev = totalBorrows;
         uint256 reservesPrev = totalReserves;
@@ -159,22 +172,27 @@ abstract contract CToken is ERC20, CTokenInterface {
             borrowsPrev,
             reservesPrev
         );
-        require(borrowRate <= borrowRateMax, "borrow rate is very high");
+        require(borrowRate <= BORROW_RATE_MAX, "borrow rate is very high");
 
         uint blockDelta = currentBlockNumber - blockNumberPrev;
 
         uint256 simpleInterestFactor = borrowRate * blockDelta;
-        uint256 interestAccumulated = simpleInterestFactor * borrowsPrev;
-        totalBorrows = interestAccumulated + borrowsPrev;
-        totalReserves = reserveFactor * interestAccumulated + reservesPrev;
-        borrowIndex = simpleInterestFactor * borrowIndexPrev + borrowIndexPrev;
+        uint256 interestAccumulated = (simpleInterestFactor * borrowsPrev) / 1e18;
+
+        uint256 totalBorrowsNew = interestAccumulated + borrowsPrev;
+        uint256 totalReservesNew = (reserveFactor * interestAccumulated) / 1e18 + reservesPrev;
+        uint256 borrowIndexNew = (simpleInterestFactor * borrowIndexPrev) / 1e18 + borrowIndexPrev;
         lastBlockNumber = currentBlockNumber;
+
+        totalBorrows = totalBorrowsNew;
+        totalReserves = totalReservesNew;
+        borrowIndex = borrowIndexNew;
 
         emit AccrueInterest(
             cashPrev,
             interestAccumulated,
-            borrowIndex,
-            totalBorrows
+            borrowIndexNew,
+            totalBorrowsNew
         );
     }
 
@@ -186,7 +204,7 @@ abstract contract CToken is ERC20, CTokenInterface {
     function getExchangeRateInternal() internal view returns (uint256) {
         uint _totalSupply = totalSupply;
         if (_totalSupply == 0) {
-            return 1;
+            return initialExchangeRate;
         } else {
             uint256 totalCash = getCashPrior();
             uint256 cashPlusBorrowsMinusReserves = totalCash +
@@ -210,7 +228,7 @@ abstract contract CToken is ERC20, CTokenInterface {
 
     function getAccountSnapshot(
         address account
-    ) external view returns (uint, uint, uint) {
+    ) external view returns (uint256, uint256, uint256) {
         return (
             tokenBalance[account],
             getBorrowBalanceInternal(account),

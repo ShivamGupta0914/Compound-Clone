@@ -1,6 +1,6 @@
 //SPDX-License-Identifier: MIT
 pragma solidity 0.8.19;
-import "./IERC20.sol";
+import "./Interfaces/IERC20.sol";
 
 /**
  * @dev Implementation of the {IERC20} interface.
@@ -8,9 +8,10 @@ import "./IERC20.sol";
  */
 
 contract ERC20 is IERC20 {
+
     uint256 public totalSupply;
-    string public tokenName;
-    string public tokenSymbol;
+    string internal tokenName;
+    string internal tokenSymbol;
     mapping(address => uint256) internal tokenBalance;
     mapping(address => mapping(address => uint256)) internal approvalBalance;
 

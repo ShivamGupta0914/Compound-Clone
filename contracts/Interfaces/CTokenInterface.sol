@@ -23,6 +23,11 @@ interface CTokenInterface {
         uint256 totalBorrowsNew
     );
 
+    struct BorrowSnapshot {
+        uint principal;
+        uint interestIndex;
+    }
+
     function mintToken(uint256 mintAmount) external;
 
     function redeemToken(uint256 redeemTokens) external;
@@ -30,4 +35,6 @@ interface CTokenInterface {
     function borrow(uint256 borrowAmount) external;
 
     function repayBorrow(uint256 repayAmount) external;
+
+    function isCtoken() external returns (bool);
 }
