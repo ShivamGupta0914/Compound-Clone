@@ -1,32 +1,34 @@
 //SPDX-License-Identifier: MIT
 pragma solidity 0.8.19;
-import "./Interfaces/ComptrollerInterface.sol";
-import "./Interfaces/PriceOracleInterface.sol";
 
 import "./CToken.sol";
+import "./Interfaces/ComptrollerInterface.sol";
+import "./Interfaces/PriceOracleInterface.sol";
+import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import "hardhat/console.sol";
 
-contract Comptroller is ComptrollerInterface {
+
+contract Comptroller is ComptrollerInterface, Initializable {
     address admin;
     PriceOracleInterface oracle;
     bool private locked;
     mapping(address => Market) markets;
     mapping(address => CToken[]) accountAssets;
 
-    modifier onlyOnce() {
-        require(!locked, "ALREADY_INITIALIZED");
-        _;
-        locked = true;
-    }
-
-    function initialize(address _admin, PriceOracleInterface _oracle) external onlyOnce {
+    function initialize(address _admin, PriceOracleInterface _oracle) external initializer {
         admin = _admin;
         oracle = _oracle;
     }
 
     function listMarket(address cToken, uint256 collateralFactor) external {
         require(msg.sender == admin, "NOT_AUTHORIZED");
+        require(CToken(cToken).isCtoken(), "NOT_CTOKEN");
+
+        if(markets[cToken].isListed) return;
+
         markets[cToken].isListed = true;
-        markets[cToken].collateralFactor = collateralFactor;
+        setCollateralFactor(cToken, collateralFactor);
+
         emit MarketListed(cToken, collateralFactor);
     }
 
@@ -80,9 +82,10 @@ contract Comptroller is ComptrollerInterface {
         emit MarketExited(cTokenAddress, msg.sender);
     }
 
-    function setCollateralFactor(address cToken, uint256 newCollateralFactor) external {
+    function setCollateralFactor(address cToken, uint256 newCollateralFactor) public {
         require(msg.sender  == admin, "NOT_AUTHORIZED");
-        require(newCollateralFactor <= 0.85e18);
+        require(newCollateralFactor <= 0.85e18, "VERY_HIGH_COLLATERAL_FACTOR");
+        require(markets[cToken].isListed, "MARKET_NOT_LISTED");
 
         uint256 oldCollateralFactor = markets[cToken].collateralFactor;
         markets[cToken].collateralFactor = newCollateralFactor;
@@ -130,7 +133,7 @@ contract Comptroller is ComptrollerInterface {
         address borrower,
         uint256 borrowAmount
     ) external returns (bool) {
-        require(markets[cToken].isListed, "market not listed");
+        require(markets[cToken].isListed, "MARKET_NOT_LISTED");
 
         if (!markets[cToken].accountMembership[borrower]) {
             joinMarket(CToken(cToken), borrower);
@@ -180,7 +183,6 @@ contract Comptroller is ComptrollerInterface {
                 vars.totalBorrows += (oracle.getUnderlyingPrice(address(cToken)) * borrowAmount) / 1e18;
             }
         }
-
         if (vars.sumCollateral > vars.totalBorrows) {
             return (vars.sumCollateral - vars.totalBorrows, 0);
         } else {

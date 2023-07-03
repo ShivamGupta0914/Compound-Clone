@@ -4,14 +4,15 @@ import "./ERC20.sol";
 import "./Interfaces/CTokenInterface.sol";
 import "./Interfaces/ComptrollerInterface.sol";
 import "./Interfaces/InterestRateModelInterface.sol";
+import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import "hardhat/console.sol";
 
-abstract contract CToken is ERC20, CTokenInterface {
-
-    uint8 constant public DECIMALS = 8;
+abstract contract CToken is ERC20, CTokenInterface, Initializable {
+    uint8 public constant DECIMALS = 8;
 
     // Maximum Borrow Rate per block.
     uint256 constant BORROW_RATE_MAX = 0.0005e16;
-    
+
     // Initial exchange rate when market is initialized.
     uint256 public initialExchangeRate;
 
@@ -37,6 +38,7 @@ abstract contract CToken is ERC20, CTokenInterface {
     address public underlying;
 
     bool public isCtoken = true;
+
     // Mapping of account addresses to outstanding borrow balances
     mapping(address => BorrowSnapshot) internal accountBorrows;
 
@@ -48,16 +50,17 @@ abstract contract CToken is ERC20, CTokenInterface {
         string calldata _name,
         string calldata _symbol,
         uint256 _reserveFactor,
+        uint256 _initialExchangeRate,
         address _underlying,
         ComptrollerInterface _comptroller,
-        IERC20 _token,
         InterestRateModelInterface _interestRateModel
-    ) public {
+    ) public initializer {
         tokenName = _name;
         tokenSymbol = _symbol;
         comptroller = _comptroller;
-        token = _token;
+        token = ERC20(_underlying);
         borrowIndex = 1e18;
+        initialExchangeRate = _initialExchangeRate;
         underlying = _underlying;
         interestRateModel = _interestRateModel;
         reserveFactor = _reserveFactor;
@@ -69,13 +72,22 @@ abstract contract CToken is ERC20, CTokenInterface {
         return getBorrowBalanceInternal(account);
     }
 
+    function getExchangeRate() public returns (uint256) {
+        accrueInterest();
+        return exchangeRate();
+    }
+
+    function exchangeRate() public view returns (uint256) {
+        return getExchangeRateInternal();
+    }
+
     function mintToken(uint256 mintAmount) external {
         accrueInterest();
 
         bool status = comptroller.mintAllowed(address(this));
-        require(status, "can not mint cTokens now");
+        require(status, "CAN_NOT_MINT_TOKENS");
         doTransferIn(mintAmount);
-        uint256 mintedCTokens = (mintAmount / getExchangeRateInternal()) * 1e18;
+        uint256 mintedCTokens = ((mintAmount * 1e18 ) / getExchangeRateInternal());
         tokenBalance[msg.sender] += mintedCTokens;
         totalSupply += mintedCTokens;
         emit Mint(msg.sender, mintedCTokens);
@@ -89,12 +101,11 @@ abstract contract CToken is ERC20, CTokenInterface {
             msg.sender,
             redeemTokens
         );
-        require(status == true, "can not redeem tokens");
+        require(status == true, "CAN_NOT_REDEEM_TOKENS");
         require(tokenBalance[msg.sender] >= redeemTokens, "NOT_ENOUGH_BALANCE");
 
         totalSupply -= redeemTokens;
         tokenBalance[msg.sender] -= redeemTokens;
-
         uint256 redeemAmount = (redeemTokens * getExchangeRateInternal()) /
             1e18;
 
@@ -110,8 +121,8 @@ abstract contract CToken is ERC20, CTokenInterface {
             borrowAmount
         );
 
-        require(status, "borrow not allowed");
-        require(getCashPrior() > borrowAmount, "insufficient underlying cash");
+        require(status, "BORROW_NOT_POSSIBLE");
+        require(getCashPrior() > borrowAmount, "INSUFFICIENT_UNDERLYING_CASH");
 
         uint accountBorrowsPrev = getBorrowBalanceInternal(msg.sender);
         uint accountBorrowsNew = accountBorrowsPrev + borrowAmount;
@@ -136,10 +147,10 @@ abstract contract CToken is ERC20, CTokenInterface {
         bool status = comptroller.repayAllowed(address(this));
         require(status, "REPAY_NOT_ALLOWED");
         uint256 currentBorrowBalance = getBorrowBalanceInternal(msg.sender);
-        require(
-            currentBorrowBalance >= repayAmount,
-            "repay amount greater than borrowed amount"
-        );
+        
+        if(repayAmount > currentBorrowBalance) {
+            repayAmount = currentBorrowBalance;
+        }
 
         doTransferIn(repayAmount);
 
@@ -158,69 +169,6 @@ abstract contract CToken is ERC20, CTokenInterface {
         );
     }
 
-    function accrueInterest() internal {
-        uint currentBlockNumber = block.number;
-        uint blockNumberPrev = lastBlockNumber;
-
-        uint256 cashPrev = getCashPrior();
-        uint256 borrowsPrev = totalBorrows;
-        uint256 reservesPrev = totalReserves;
-        uint256 borrowIndexPrev = borrowIndex;
-
-        uint borrowRate = interestRateModel.getBorrowRate(
-            cashPrev,
-            borrowsPrev,
-            reservesPrev
-        );
-        require(borrowRate <= BORROW_RATE_MAX, "borrow rate is very high");
-
-        uint blockDelta = currentBlockNumber - blockNumberPrev;
-
-        uint256 simpleInterestFactor = borrowRate * blockDelta;
-        uint256 interestAccumulated = (simpleInterestFactor * borrowsPrev) / 1e18;
-
-        uint256 totalBorrowsNew = interestAccumulated + borrowsPrev;
-        uint256 totalReservesNew = (reserveFactor * interestAccumulated) / 1e18 + reservesPrev;
-        uint256 borrowIndexNew = (simpleInterestFactor * borrowIndexPrev) / 1e18 + borrowIndexPrev;
-        lastBlockNumber = currentBlockNumber;
-
-        totalBorrows = totalBorrowsNew;
-        totalReserves = totalReservesNew;
-        borrowIndex = borrowIndexNew;
-
-        emit AccrueInterest(
-            cashPrev,
-            interestAccumulated,
-            borrowIndexNew,
-            totalBorrowsNew
-        );
-    }
-
-    function getExchangeRate() external returns (uint256) {
-        accrueInterest();
-        return getExchangeRateInternal();
-    }
-
-    function getExchangeRateInternal() internal view returns (uint256) {
-        uint _totalSupply = totalSupply;
-        if (_totalSupply == 0) {
-            return initialExchangeRate;
-        } else {
-            uint256 totalCash = getCashPrior();
-            uint256 cashPlusBorrowsMinusReserves = totalCash +
-                totalBorrows -
-                totalReserves;
-            uint256 exchangeRate = (cashPlusBorrowsMinusReserves * 1e18) /
-                _totalSupply;
-
-            return exchangeRate;
-        }
-    }
-
-    function getCashPrior() internal view returns (uint256) {
-        return token.balanceOf(address(this));
-    }
-
     function setReserveFactor(uint256 _newReserveFactor) external {
         require(msg.sender == admin, "not authorized to set reserve factor");
         reserveFactor = _newReserveFactor;
@@ -236,17 +184,67 @@ abstract contract CToken is ERC20, CTokenInterface {
         );
     }
 
-    function getBorrowBalanceInternal(
-        address account
-    ) internal view returns (uint256) {
-        BorrowSnapshot storage borrowSnapshot = accountBorrows[account];
+    function accrueInterest() internal {
+        uint256 currentBlockNumber = block.number;
+        uint256 blockNumberPrev = lastBlockNumber;
 
-        if (borrowSnapshot.principal == 0) {
-            return 0;
+        uint256 cashPrev = getCashPrior();
+        uint256 borrowsPrev = totalBorrows;
+        uint256 reservesPrev = totalReserves;
+        uint256 borrowIndexPrev = borrowIndex;
+
+        uint256 borrowRate = interestRateModel.getBorrowRate(
+            cashPrev,
+            borrowsPrev,
+            reservesPrev
+        );
+        require(borrowRate <= BORROW_RATE_MAX, "borrow rate is very high");
+
+        uint256 blockDelta = currentBlockNumber - blockNumberPrev;
+
+        uint256 simpleInterestFactor = borrowRate * blockDelta;
+        uint256 interestAccumulated = (simpleInterestFactor * borrowsPrev) /
+            1e18;
+
+        uint256 totalBorrowsNew = interestAccumulated + borrowsPrev;
+        uint256 totalReservesNew = (reserveFactor * interestAccumulated) /
+            1e18 +
+            reservesPrev;
+        uint256 borrowIndexNew = (simpleInterestFactor * borrowIndexPrev) /
+            1e18 +
+            borrowIndexPrev;
+        lastBlockNumber = currentBlockNumber;
+
+        totalBorrows = totalBorrowsNew;
+        totalReserves = totalReservesNew;
+        borrowIndex = borrowIndexNew;
+
+        emit AccrueInterest(
+            cashPrev,
+            interestAccumulated,
+            borrowIndexNew,
+            totalBorrowsNew
+        );
+    }
+
+    function getExchangeRateInternal() internal view returns (uint256) {
+        uint _totalSupply = totalSupply;
+        if (_totalSupply == 0) {
+            return initialExchangeRate;
+        } else {
+            uint256 totalCash = getCashPrior();
+            uint256 cashPlusBorrowsMinusReserves = totalCash +
+                totalBorrows -
+                totalReserves;
+            uint256 exchangeRateStored = (cashPlusBorrowsMinusReserves * 1e18) /
+                _totalSupply;
+
+            return exchangeRateStored;
         }
-        uint256 principalTimesIndex = borrowSnapshot.principal * borrowIndex;
+    }
 
-        return principalTimesIndex / borrowSnapshot.interestIndex;
+    function getCashPrior() internal view returns (uint256) {
+        return token.balanceOf(address(this));
     }
 
     function doTransferIn(uint256 amount) internal {
@@ -255,5 +253,17 @@ abstract contract CToken is ERC20, CTokenInterface {
 
     function doTransferOut(uint256 amount) internal {
         token.transfer(msg.sender, amount);
+    }
+
+    function getBorrowBalanceInternal(
+        address account
+    ) internal view returns (uint256) {
+        BorrowSnapshot storage borrowSnapshot = accountBorrows[account];
+
+        if (borrowSnapshot.principal == 0) return 0;
+
+        uint256 principalTimesIndex = borrowSnapshot.principal * borrowIndex;
+
+        return principalTimesIndex / borrowSnapshot.interestIndex;
     }
 }

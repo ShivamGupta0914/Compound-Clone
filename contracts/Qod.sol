@@ -2,7 +2,7 @@
 pragma solidity 0.8.19;
 import "./ERC20.sol";
 
-contract Token is ERC20 {
+contract Qod is ERC20 {
 
     uint8 constant public DECIMALS = 18;
 

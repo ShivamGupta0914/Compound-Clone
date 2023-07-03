@@ -5,6 +5,7 @@
     "hardhat": "^2.16.1"
   },
   "dependencies": {
+    "@openzeppelin/contracts-upgradeable": "^4.9.2",
     "dotenv": "^16.3.1"
   }
 }

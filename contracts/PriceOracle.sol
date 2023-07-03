@@ -3,7 +3,7 @@ pragma solidity 0.8.19;
 import "./Interfaces/PriceOracleInterface.sol";
 import "./Interfaces/CTokenInterface.sol";
 
-contract PriceOracle is PriceOracleInterface{
+contract PriceOracle is PriceOracleInterface {
 
     address internal admin;
     mapping(address => uint256) internal prices;
@@ -13,6 +13,7 @@ contract PriceOracle is PriceOracleInterface{
     }
 
     function getUnderlyingPrice(address cToken) external view returns (uint256) {
+        require(prices[cToken] > 0, "PRICE_NOT_SET");
         return prices[cToken];
     }
 
